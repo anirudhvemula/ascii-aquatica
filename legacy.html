@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASCII Aquatica</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #001a1a;
+    font-family: 'Share Tech Mono', monospace;
+    overflow: hidden;
+    color: #00ffcc;
+  }
+
+  #canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  #ui {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 100;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-flex-direction: column;
+    flex-direction: column;
+  }
+
+  .btn {
+    background: rgba(0,20,20,0.85);
+    border: 1px solid rgba(0, 255, 204, 0.267);
+    color: #00ffcc;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    padding: 5px 10px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    -webkit-transition: all 0.2s;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .btn:hover { background: rgba(0, 255, 204, 0.133); border-color: #00ffcc; }
+  .btn.active { background: rgba(0, 255, 204, 0.2); border-color: #00ffcc; color: #fff; }
+
+  #subtitle {
+    position: fixed;
+    bottom: 60px;
+    left: 50%;
+    -webkit-transform: translateX(-50%);
+    transform: translateX(-50%);
+    font-family: 'VT323', monospace;
+    font-size: 28px;
+    color: #fffde0;
+    text-shadow: 0 0 10px #ffee00, 0 0 20px #ffaa00;
+    background: rgba(0,0,0,0.5);
+    padding: 6px 18px;
+    border: 1px solid rgba(255, 238, 0, 0.267);
+    text-align: center;
+    pointer-events: none;
+    display: none;
+    max-width: 80vw;
+    white-space: pre-line;
+  }
+
+  #controls {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    -webkit-transform: translateX(-50%);
+    transform: translateX(-50%);
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+  }
+  #controls > * { margin-right: 8px; }
+  #controls > *:last-child { margin-right: 0; }
+
+  #volume-bar {
+    width: 100px;
+    height: 4px;
+    background: #003333;
+    cursor: pointer;
+    position: relative;
+  }
+  #volume-fill {
+    height: 100%;
+    background: #00ffcc;
+    width: 70%;
+    transition: width 0.1s;
+  }
+
+  #freq-display {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    font-size: 10px;
+    color: rgba(0, 255, 204, 0.267);
+    text-align: right;
+    pointer-events: none;
+  }
+
+  #file-input { display: none; }
+
+  #recording-indicator {
+    display: none;
+    color: #ff4444;
+    animation: blink 1s infinite;
+    font-size: 11px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <button class="btn" onclick="document.getElementById('file-input').click()">🎵 Load Audio</button>
+  <input type="file" id="file-input" accept="audio/*">
+  <button class="btn" id="play-btn" onclick="togglePlay()">▶ Play</button>
+  <button class="btn" onclick="rewindAudio()">⏮ Rewind</button>
+  <button class="btn" id="record-btn" onclick="toggleRecord()">⏺ Export Video</button>
+  <span id="recording-indicator">⏺ REC</span>
+</div>
+
+<div id="controls">
+  <span style="font-size:10px;color:#00ffcc88">VOL</span>
+  <div id="volume-bar" onclick="setVolume(event)">
+    <div id="volume-fill"></div>
+  </div>
+  <span style="font-size:10px;color:#00ffcc88" id="time-display">0:00</span>
+</div>
+
+<div id="subtitle"></div>
+<div id="freq-display">BASS: 0 | MID: 0 | TREBLE: 0</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let W, H, COLS, ROWS, CELL_W, CELL_H;
+const FONT_SIZE = 14;
+const FONT = `${FONT_SIZE}px 'Share Tech Mono', monospace`;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  W = canvas.width; H = canvas.height;
+  CELL_W = 8.4; CELL_H = FONT_SIZE * 1.2;
+  COLS = Math.floor(W / CELL_W);
+  ROWS = Math.floor(H / CELL_H);
+  ctx.font = FONT;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── Audio ───────────────────────────────────────────────────────────────────
+let audioCtx, analyser, source, gainNode, audioBuffer, audioData;
+let isPlaying = false, startTime = 0, pauseOffset = 0;
+let bass = 0, mid = 0, treble = 0, beat = false, beatCooldown = 0;
+let lastBeatEnergy = 0;
+
+const fileInput = document.getElementById('file-input');
+fileInput.onchange = function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  if (!audioCtx) initAudio();
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    audioCtx.decodeAudioData(ev.target.result, function(buffer) {
+      audioBuffer = buffer;
+      document.getElementById('play-btn').textContent = '\u25b6 Play';
+      isPlaying = false;
+    });
+  };
+  reader.readAsArrayBuffer(file);
+};
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = 0.7;
+  analyser.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+  audioData = new Uint8Array(analyser.frequencyBinCount);
+}
+
+function togglePlay() {
+  if (!audioBuffer) { alert('Load an audio file first!'); return; }
+  if (!audioCtx) initAudio();
+  if (isPlaying) {
+    pauseOffset += audioCtx.currentTime - startTime;
+    source.stop();
+    isPlaying = false;
+    document.getElementById('play-btn').textContent = '▶ Play';
+  } else {
+    source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(analyser);
+    source.start(0, pauseOffset % audioBuffer.duration);
+    startTime = audioCtx.currentTime;
+    isPlaying = true;
+    document.getElementById('play-btn').textContent = '⏸ Pause';
+    source.onended = () => {
+      if (isPlaying) {
+        isPlaying = false;
+        pauseOffset = 0;
+        document.getElementById('play-btn').textContent = '▶ Play';
+      }
+    };
+  }
+}
+
+function rewindAudio() {
+  if (!audioBuffer) return;
+  if (isPlaying) { source.stop(); isPlaying = false; }
+  pauseOffset = 0;
+  document.getElementById('play-btn').textContent = '▶ Play';
+  document.getElementById('time-display').textContent = '0:00';
+}
+
+function setVolume(e) {
+  const bar = document.getElementById('volume-bar');
+  const rect = bar.getBoundingClientRect();
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  document.getElementById('volume-fill').style.width = (pct * 100) + '%';
+  if (gainNode) gainNode.gain.value = pct;
+}
+
+function getAudioParams() {
+  if (!analyser || !audioData) return;
+  analyser.getByteFrequencyData(audioData);
+  const len = audioData.length;
+  const bassEnd = Math.floor(len * 0.03);
+  const midEnd = Math.floor(len * 0.3);
+  let b=0, m=0, t=0;
+  for (let i=0;i<bassEnd;i++) b+=audioData[i];
+  for (let i=bassEnd;i<midEnd;i++) m+=audioData[i];
+  for (let i=midEnd;i<len;i++) t+=audioData[i];
+  bass = b/bassEnd/255;
+  mid = m/(midEnd-bassEnd)/255;
+  treble = t/(len-midEnd)/255;
+
+  // beat detection
+  if (beatCooldown > 0) { beatCooldown--; beat=false; }
+  else {
+    const energy = bass;
+    if (energy > lastBeatEnergy * 1.4 && energy > 0.3) {
+      beat = true;
+      beatCooldown = 15;
+    } else beat = false;
+    lastBeatEnergy = lastBeatEnergy * 0.9 + energy * 0.1;
+  }
+
+  document.getElementById('freq-display').textContent =
+    `BASS: ${(bass*100).toFixed(0)} | MID: ${(mid*100).toFixed(0)} | TREBLE: ${(treble*100).toFixed(0)}`;
+}
+
+// ─── Lyrics / SRT ────────────────────────────────────────────────────────────
+let showLyrics = false;
+const subtitleEl = document.getElementById('subtitle');
+
+const lyrics = [
+  {start:0.5, end:3.5, text:"Baby Shark, doo doo doo doo doo doo"},
+  {start:3.5, end:6.5, text:"Baby Shark, doo doo doo doo doo doo"},
+  {start:6.5, end:9.5, text:"Baby Shark, doo doo doo doo doo doo"},
+  {start:9.5, end:12, text:"Baby Shark! 🦈"},
+  {start:12, end:15, text:"Mommy Shark, doo doo doo doo doo doo"},
+  {start:15, end:18, text:"Mommy Shark, doo doo doo doo doo doo"},
+  {start:18, end:21, text:"Mommy Shark, doo doo doo doo doo doo"},
+  {start:21, end:24, text:"Mommy Shark! 🦈💗"},
+  {start:24, end:27, text:"Daddy Shark, doo doo doo doo doo doo"},
+  {start:27, end:30, text:"Daddy Shark, doo doo doo doo doo doo"},
+  {start:30, end:33, text:"Daddy Shark, doo doo doo doo doo doo"},
+  {start:33, end:36, text:"Daddy Shark! 🦈💙"},
+  {start:36, end:39, text:"Grandma Shark, doo doo doo doo doo doo"},
+  {start:39, end:42, text:"Grandma Shark, doo doo doo doo doo doo"},
+  {start:42, end:45, text:"Grandma Shark, doo doo doo doo doo doo"},
+  {start:45, end:48, text:"Grandma Shark! 🦈🧡"},
+  {start:48, end:51, text:"Grandpa Shark, doo doo doo doo doo doo"},
+  {start:51, end:54, text:"Grandpa Shark, doo doo doo doo doo doo"},
+  {start:54, end:57, text:"Grandpa Shark, doo doo doo doo doo doo"},
+  {start:57, end:60, text:"Grandpa Shark! 🦈💚"},
+  {start:60, end:63, text:"Let's go hunt, doo doo doo doo doo doo"},
+  {start:63, end:66, text:"Let's go hunt, doo doo doo doo doo doo"},
+  {start:66, end:69, text:"Let's go hunt, doo doo doo doo doo doo"},
+  {start:69, end:72, text:"Let's go hunt!"},
+  {start:72, end:75, text:"Run away, doo doo doo doo doo doo"},
+  {start:75, end:78, text:"Run away, doo doo doo doo doo doo"},
+  {start:78, end:81, text:"Run away, doo doo doo doo doo doo"},
+  {start:81, end:84, text:"Run away! 🏃"},
+  {start:84, end:87, text:"Safe at last, doo doo doo doo doo doo"},
+  {start:87, end:90, text:"Safe at last, doo doo doo doo doo doo"},
+  {start:90, end:93, text:"Safe at last, doo doo doo doo doo doo"},
+  {start:93, end:96, text:"Safe at last! 🎉"},
+  {start:96, end:99, text:"It's the end, doo doo doo doo doo doo"},
+  {start:99, end:102, text:"It's the end, doo doo doo doo doo doo"},
+  {start:102, end:105, text:"It's the end, doo doo doo doo doo doo"},
+  {start:105, end:108, text:"It's the end! 🦈🎵"},
+];
+
+function exportSRT() {} // removed - kept as stub to avoid reference errors
+
+// ─── Video Export ─────────────────────────────────────────────────────────────
+let mediaRecorder, recordedChunks = [], isRecording = false;
+
+function toggleRecord() {
+  if (typeof canvas.captureStream === 'undefined' || typeof MediaRecorder === 'undefined') {
+    alert('Video export is not supported in this browser.');
+    return;
+  }
+  if (isRecording) {
+    mediaRecorder.stop();
+    isRecording = false;
+    document.getElementById('record-btn').textContent = '⏺ Export Video';
+    document.getElementById('record-btn').classList.remove('active');
+    document.getElementById('recording-indicator').style.display = 'none';
+  } else {
+    const stream = canvas.captureStream(30);
+    if (audioCtx && gainNode) {
+      const dest = audioCtx.createMediaStreamDestination();
+      gainNode.connect(dest);
+      dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+    }
+    recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    mediaRecorder = new MediaRecorder(stream, {mimeType, videoBitsPerSecond: 8000000});
+    mediaRecorder.ondataavailable = e => { if (e.data.size>0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, {type:'video/webm'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'baby-shark-aquarium.webm';
+      a.click();
+    };
+    mediaRecorder.start(100);
+    isRecording = true;
+    document.getElementById('record-btn').textContent = '⏹ Stop & Save';
+    document.getElementById('record-btn').classList.add('active');
+    document.getElementById('recording-indicator').style.display = 'inline';
+  }
+}
+
+// ─── ASCII Art Definitions ────────────────────────────────────────────────────
+const SHARK_FRAMES = {
+  right: [[
+    '     /"*._         _   ',
+    '  .-*\'`    `*-.._.-\'/ ',
+    '< * ))     ,       (',
+    ' `*-._`._(__.--*"`.\\ '
+  ]],
+  left: [[
+    '  _         _.*"\\  ',
+    '\\`-.._.-\'*`    `*-.',
+    ' )       ,     (( * >',
+    ' /.*"`--.(__._`-.*` '
+  ]]
+};
+
+const BABY_FRAMES = {
+  right: [[
+    '   ,-,        ',
+    ' ,/.(    __   ',
+    ",-'  `!._/ /  ",
+    '> @ )<|   _ < ',
+    " `-..,,;' \\_\\ "
+  ]],
+  left: [[
+    '        ,-,   ',
+    '   __    ).\\, ',
+    "  \\ \\_._!`  `-,",
+    ' > _   |>( @ <',
+    " /_/ `;,,..`-' "
+  ]]
+};
+
+const FISH_FRAMES_R = ["><(((°>", "><((°>", "><(°>"];
+const FISH_FRAMES_L = ["<°)))><", "<°))><", "<°)><"];
+
+const TURTLE_CHARS = {
+  right: [
+    "   __   ",
+    "  /  \\  ",
+    "=( °w°)=>",
+    "  \\__/  ",
+    " _|  |_ "
+  ],
+  left: [
+    "   __   ",
+    "  /  \\  ",
+    "<=( w° )=",
+    "  \\__/  ",
+    " _|  |_ "
+  ]
+};
+
+// Bigger, more visible crab
+const CRAB_CHARS = [
+  [" /V\\ ", "(o¥o)", " \\_/ ", " d b "],
+  [" \\V/ ", "(o¥o)", " \\_/ ", " b d "]
+];
+
+const BUBBLE_CHARS = ["o","O","°","·","○","o"];
+
+// Jellyfish frames (using braille-art simplified to ASCII-safe)
+const JELLY_FRAMES = [
+  [
+    "  _~~_  ",
+    " (o  o) ",
+    "  \\__/  ",
+    " | || | ",
+    "  \\  /  "
+  ],
+  [
+    "  _~~_  ",
+    " (o  o) ",
+    "  \\__/  ",
+    " /|  |\\  ",
+    "  /  \\  "
+  ]
+];
+
+// ─── Entity Classes ───────────────────────────────────────────────────────────
+function rand(a, b) { return a + Math.random() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b)); }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+class Entity {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.vx = rand(-1, 1); this.vy = rand(-0.3, 0.3);
+    this.dirTimer = rand(2, 5);
+    this.frame = 0;
+    this.frameTimer = 0;
+  }
+  normalizeSpeed(speed) {
+    const len = Math.sqrt(this.vx**2 + this.vy**2) || 1;
+    this.vx = (this.vx/len)*speed;
+    this.vy = (this.vy/len)*speed;
+  }
+  updateDir(dt, speed) {
+    this.dirTimer -= dt;
+    if (this.dirTimer <= 0 || beat) {
+      const angle = rand(-0.45, 0.45) * Math.PI;
+      this.vx = Math.cos(angle) * (Math.random() < 0.5 ? 1 : -1);
+      this.vy = Math.sin(angle);
+      this.normalizeSpeed(speed);
+      this.dirTimer = rand(2.5, 5.5);
+    }
+  }
+  move(dt) {
+    this.x += this.vx * dt * 60;
+    this.y += this.vy * dt * 60;
+    const mx = 90, myTop = 70, myBot = 130; // bigger bottom margin keeps fish away from floor
+    if (this.x < mx)      { this.vx =  Math.abs(this.vx); this.dirTimer = rand(1.5,3); }
+    if (this.x > W - mx)  { this.vx = -Math.abs(this.vx); this.dirTimer = rand(1.5,3); }
+    if (this.y < myTop)   { this.vy =  Math.abs(this.vy); }
+    if (this.y > H - myBot){ this.vy = -Math.abs(this.vy) - 0.2; this.dirTimer = 0; } // push back up hard
+  }
+  advanceFrame(dt, fps) {
+    this.frameTimer += dt;
+    if (this.frameTimer > 1/fps) {
+      this.frameTimer = 0;
+      this.frame = (this.frame + 1) % 2;
+    }
+  }
+}
+
+// ── Shark ──────────────────────────────────────────────────────────────────────
+class Shark extends Entity {
+  constructor(x, y, color, name, isBaby) {
+    super(x, y);
+    this.color = color;
+    this.name = name;
+    this.isBaby = isBaby;
+    this.scale = isBaby ? 1.0 : 1.15;   // slightly reduced so they fit better
+    this.speed = isBaby ? 1.5 : 1.1;
+    this.normalizeSpeed(this.speed);
+    this.pulseScale = 1;
+    // Give each shark a distinct random start direction
+    const angle = rand(0, Math.PI * 2);
+    this.vx = Math.cos(angle) * this.speed;
+    this.vy = Math.sin(angle) * 0.4;
+    this.normalizeSpeed(this.speed);
+  }
+  update(dt, slotIndex) {
+    const speed = this.speed * (1 + mid * 0.7);
+    const target = school.slotPos(slotIndex);
+
+    // Steer strongly toward formation slot
+    const dx = target.x - this.x, dy = target.y - this.y;
+    const dist = Math.sqrt(dx**2+dy**2) || 1;
+
+    // Strong pull toward slot — the further away, the harder the pull
+    const pull = Math.min(dist * 0.08, 0.6);
+    this.vx += (dx/dist) * pull;
+    this.vy += (dy/dist) * pull;
+
+    // Inherit the school's velocity direction (alignment)
+    this.vx += school.vx * 0.08;
+    this.vy += school.vy * 0.08;
+
+    // Clamp to speed
+    const len = Math.sqrt(this.vx**2+this.vy**2) || 1;
+    if (len > speed*1.5) { this.vx=(this.vx/len)*speed*1.5; this.vy=(this.vy/len)*speed*1.5; }
+
+    this.x += this.vx * dt * 60;
+    this.y += this.vy * dt * 60;
+
+    // Soft boundary (let school leader handle hard bounces)
+    if (this.x < 30)     this.vx += 0.4;
+    if (this.x > W - 30) this.vx -= 0.4;
+    if (this.y < 30)     this.vy += 0.4;
+    if (this.y > H - 60) this.vy -= 0.4;
+
+    this.advanceFrame(dt, 2.5 + mid*3);
+    this.pulseScale = 1 + bass * 0.1;
+  }
+
+  draw() {
+    const goingRight = this.vx >= 0;
+    const frameSet = this.isBaby
+      ? (goingRight ? BABY_FRAMES.right : BABY_FRAMES.left)
+      : (goingRight ? SHARK_FRAMES.right : SHARK_FRAMES.left);
+    const linesArr = frameSet[0];
+
+    const fs = Math.round(FONT_SIZE * this.scale);
+    const lineH = fs * 1.3;
+    const charW = fs * 0.601;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.scale(this.pulseScale, this.pulseScale);
+    ctx.font = `${fs}px 'Share Tech Mono', monospace`;
+
+    // ── Draw ASCII text ──
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = 10 + bass * 16;
+    linesArr.forEach((line, i) => {
+      ctx.fillText(line, 0, i * lineH);
+    });
+
+    // ── Name tag ──
+    ctx.font = `bold ${Math.round(9 * this.scale)}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = this.color;
+    ctx.shadowBlur = 3;
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(this.name, 0, linesArr.length * lineH + 4);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// ── Fish ───────────────────────────────────────────────────────────────────────
+class Fish extends Entity {
+  constructor() {
+    super(rand(120, W-120), rand(80, H*0.65));  // spawn in upper 65% only, away from floor
+    this.type = randInt(0, FISH_FRAMES_R.length);
+    this.speed = rand(0.55, 1.1);   // faster base speed
+    this.normalizeSpeed(this.speed);
+    this.color = `hsl(${randInt(0,360)},80%,70%)`;
+    this.eaten = false;
+    this.fleeing = false;
+    // start with a clear horizontal-ish direction so they're visibly swimming
+    const angle = rand(-0.3, 0.3) * Math.PI;
+    this.vx = Math.cos(angle) * (Math.random() < 0.5 ? 1 : -1) * this.speed;
+    this.vy = Math.sin(angle) * this.speed;
+  }
+  update(dt, sharks) {
+    let nearestDist = Infinity;
+    this.fleeing = false;
+    sharks.forEach(s => {
+      const d = Math.hypot(s.x-this.x, s.y-this.y);
+      if (d < nearestDist) nearestDist = d;
+      if (d < 200) {
+        this.fleeing = true;
+        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt(dx**2+dy**2)||1;
+        this.vx += dx/dist*0.12;
+        this.vy += dy/dist*0.12;
+      }
+    });
+    sharks.forEach(s => {
+      if (Math.hypot(s.x-this.x, s.y-this.y) < 28) this.eaten = true;
+    });
+
+    const baseSpeed = this.fleeing ? this.speed * 2.0 : this.speed;
+    this.updateDir(dt, baseSpeed * (1 + mid*0.3));
+
+    // Hard speed cap
+    const maxSpd = this.fleeing ? 2.0 : 1.2;
+    const len = Math.sqrt(this.vx**2+this.vy**2)||1;
+    if (len > maxSpd) { this.vx=(this.vx/len)*maxSpd; this.vy=(this.vy/len)*maxSpd; }
+
+    this.move(dt);
+    this.advanceFrame(dt, 1.2);
+  }
+  draw() {
+    const goingRight = this.vx >= 0;
+    const c = (goingRight ? FISH_FRAMES_R : FISH_FRAMES_L)[this.type % FISH_FRAMES_R.length];
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.font = FONT;
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = this.fleeing ? 10 : 3;
+    ctx.fillText(c, 0, 0);
+    ctx.restore();
+  }
+}
+
+// ── Turtle ─────────────────────────────────────────────────────────────────────
+class Turtle extends Entity {
+  constructor() {
+    super(rand(100, W-100), rand(H*0.35, H*0.72)); // mid-water band, never near top
+    this.speed = rand(0.25, 0.5);
+    this.normalizeSpeed(this.speed);
+    // slight color variation: teal/green shades
+    this.color = `hsl(${randInt(140,175)},75%,55%)`;
+    this.fleeing = false;
+    // start swimming horizontally
+    const sign = Math.random() < 0.5 ? 1 : -1;
+    this.vx = sign * this.speed;
+    this.vy = rand(-0.15, 0.15) * this.speed;
+    this.normalizeSpeed(this.speed);
+  }
+  update(dt, sharks) {
+    this.fleeing = false;
+    sharks.forEach(s => {
+      const d = Math.hypot(s.x-this.x, s.y-this.y);
+      if (d < 200) {
+        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt(dx**2+dy**2)||1;
+        this.vx += dx/dist*0.09;
+        this.vy += dy/dist*0.09;
+        this.fleeing = true;
+      }
+    });
+    this.updateDir(dt, this.fleeing ? this.speed*1.7 : this.speed);
+    const maxSpd = this.fleeing ? 0.9 : 0.55;
+    const len = Math.sqrt(this.vx**2+this.vy**2)||1;
+    if (len > maxSpd) { this.vx=(this.vx/len)*maxSpd; this.vy=(this.vy/len)*maxSpd; }
+    this.move(dt);
+    this.advanceFrame(dt, 1.2);
+  }
+  draw() {
+    const lines = this.vx >= 0 ? TURTLE_CHARS.right : TURTLE_CHARS.left;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.font = `${FONT_SIZE + 1}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = 7 + bass * 6;
+    lines.forEach((l, i) => ctx.fillText(l, 0, i * CELL_H));
+    ctx.restore();
+  }
+}
+
+// ── Crab ───────────────────────────────────────────────────────────────────────
+class Crab extends Entity {
+  constructor() {
+    super(rand(60, W-60), H*0.88 + rand(-20,10));
+    this.speed = rand(0.35, 0.65);
+    this.vy = 0;
+    this.vx = Math.random()<0.5 ? this.speed : -this.speed;
+    this.color = '#ff6644';
+    this.dirTimer = rand(1.5, 4);
+    this.baseY = this.y;
+  }
+  update(dt, sharks) {
+    this.dirTimer -= dt;
+    if (this.dirTimer <= 0 || beat) {
+      this.vx = -this.vx;
+      this.dirTimer = rand(2, 5);
+    }
+    sharks.forEach(s => {
+      const d = Math.hypot(s.x-this.x, s.y-this.y);
+      if (d < 130) this.vx = (this.x > s.x ? 1 : -1) * this.speed * 1.8;
+    });
+    // hard cap on crab speed
+    const absVx = Math.abs(this.vx);
+    if (absVx > 1.2) this.vx = (this.vx/absVx)*1.2;
+    this.x += this.vx * dt * 60;
+    this.y = this.baseY + Math.sin(t*2 + this.x*0.05)*3; // small bobbing
+    if (this.x < 20)   this.vx =  Math.abs(this.vx);
+    if (this.x > W-20) this.vx = -Math.abs(this.vx);
+    this.advanceFrame(dt, 2.5);
+  }
+  draw() {
+    const lines = CRAB_CHARS[this.frame % 2];
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.font = `${FONT_SIZE + 2}px 'Share Tech Mono', monospace`; // slightly bigger
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = 10;
+    lines.forEach((l,i) => ctx.fillText(l, 0, i*CELL_H));
+    ctx.restore();
+  }
+}
+
+// ── Jellyfish ──────────────────────────────────────────────────────────────────
+class Jellyfish extends Entity {
+  constructor() {
+    super(rand(80, W-80), rand(H*0.1, H*0.65));
+    this.speed = rand(0.15, 0.35);
+    this.normalizeSpeed(this.speed);
+    this.color = `hsl(${randInt(270,330)},80%,75%)`;
+    this.phase = rand(0, Math.PI*2);
+    this.baseY = this.y;
+    this.bobAmp = rand(8, 20);
+    this.bobSpeed = rand(0.4, 0.9);
+  }
+  update(dt) {
+    // Gentle drift + vertical bob
+    this.x += this.vx * dt * 60 * 0.5;
+    this.y = this.baseY + Math.sin(t * this.bobSpeed + this.phase) * this.bobAmp;
+    this.baseY += this.vy * dt * 60 * 0.3;
+
+    // Soft direction change
+    this.dirTimer -= dt;
+    if (this.dirTimer <= 0) {
+      const angle = rand(-0.3, 0.3)*Math.PI;
+      this.vx = Math.cos(angle)*(Math.random()<0.5?1:-1)*this.speed;
+      this.vy = Math.sin(angle)*this.speed*0.3;
+      this.dirTimer = rand(3, 7);
+    }
+
+    // Wrap edges gently
+    if (this.x < 60)    this.vx =  Math.abs(this.vx);
+    if (this.x > W-60)  this.vx = -Math.abs(this.vx);
+    if (this.baseY < 60)       this.vy =  Math.abs(this.vy);
+    if (this.baseY > H*0.7)   this.vy = -Math.abs(this.vy);
+
+    this.advanceFrame(dt, 1.2 + bass*1.5);
+  }
+  draw() {
+    const lines = JELLY_FRAMES[this.frame % 2];
+    const glow = 6 + bass*18 + treble*8;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.font = `${FONT_SIZE}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = glow;
+    ctx.globalAlpha = 0.85 + bass*0.15;
+    lines.forEach((l,i) => ctx.fillText(l, 0, i*CELL_H));
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+// ── Bubble ─────────────────────────────────────────────────────────────────────
+class Bubble {
+  constructor(x, y) {
+    this.x = x + rand(-12, 12);
+    this.y = y;
+    this.vy = rand(-0.4, -1.1);   // slower rise
+    this.vx = rand(-0.08, 0.08);
+    this.life = rand(0.8, 1.0);   // start full
+    this.decay = rand(0.06, 0.14); // much slower decay — was 0.3
+    this.char = BUBBLE_CHARS[randInt(0, BUBBLE_CHARS.length)];
+    this.size = randInt(10, 20);
+    this.hue = randInt(160,220);
+  }
+  update(dt) {
+    this.x += this.vx * dt * 60;
+    this.y += this.vy * dt * 60 * (1 + treble * 0.8);
+    this.life -= dt * this.decay;
+    this.vx += rand(-0.015, 0.015);
+  }
+  draw() {
+    const alpha = Math.max(0, Math.min(1, this.life));
+    ctx.save();
+    ctx.font = `${this.size}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = `hsla(${this.hue},80%,80%,${alpha})`;
+    ctx.shadowColor = `hsl(${this.hue},80%,80%)`;
+    ctx.shadowBlur = 5;
+    ctx.fillText(this.char, this.x, this.y);
+    ctx.restore();
+  }
+  get dead() { return this.life <= 0; } // no early kill on y — let them reach top!
+}
+
+// ── Seaweed ────────────────────────────────────────────────────────────────────
+class Seaweed {
+  constructor(x) {
+    this.baseX = x;
+    this.height = randInt(6, 13);
+    this.phase = rand(0, Math.PI*2);
+    this.speed = rand(0.4, 1.1);
+    this.color = `hsl(${randInt(110,155)},80%,50%)`;
+    this.segments = Array.from({length: this.height}, () => ({
+      offset: rand(0, Math.PI)
+    }));
+  }
+  draw(t) {
+    const sway = (bass * 22 + 7) * (1 + mid * 0.4);
+    ctx.save();
+    ctx.font = `${FONT_SIZE+2}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = this.color;
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = 5 + bass*8;
+    for (let i = 0; i < this.height; i++) {
+      const { offset } = this.segments[i];
+      const yFrac = i / this.height;
+      const swayAmt = sway * yFrac * yFrac;
+      const sw = Math.sin(t * this.speed + this.phase + offset);
+      const x = this.baseX + sw * swayAmt;
+      const y = H - (i + 1) * (CELL_H * 1.05);
+      const c = sw > 0.4 ? '/' : sw < -0.4 ? '\\' : '|';
+      ctx.fillText(c, x, y);
+    }
+    ctx.restore();
+  }
+}
+
+// ─── School Leader — shared brain for all sharks ──────────────────────────────
+// The leader picks one target fish and moves toward it. All sharks orbit the
+// leader position in a loose V-formation, so they travel as a tight group.
+const school = {
+  x: W * 0.5, y: H * 0.4,
+  vx: 1.0, vy: 0.35,          // initial diagonal slope
+  speed: 1.2,
+  dirTimer: 0,
+  target: null,                // reference to the fish being chased
+
+  // V-formation slot offsets for each shark index [dx, dy]
+  // Daddy leads; others fan out behind him
+  slots: [
+    [   0,   0],   // 0 Daddy   — nose of the V
+    [-120, -55],   // 1 Mommy   — upper-left wing
+    [-120,  55],   // 2 Grandpa — lower-left wing
+    [-240, -28],   // 3 Baby    — upper-left rear
+    [-240,  28],   // 4 Grandma — lower-left rear
+  ],
+
+  update(dt, prey) {
+    // Pick / refresh target: choose the closest living fish ahead of the school
+    const alive = prey.filter(p => !p.eaten);
+    if (!this.target || this.target.eaten || Math.random() < 0.005) {
+      // Pick fish roughly in the direction we're heading
+      let best = null, bestScore = -Infinity;
+      alive.forEach(p => {
+        const dx = p.x - this.x, dy = p.y - this.y;
+        const dot = dx * this.vx + dy * this.vy; // ahead of school?
+        const dist = Math.sqrt(dx**2+dy**2) || 1;
+        const score = dot / dist - dist * 0.001;
+        if (score > bestScore) { bestScore = score; best = p; }
+      });
+      this.target = best;
+    }
+
+    // Steer toward target (or wander if none)
+    if (this.target) {
+      const dx = this.target.x - this.x, dy = this.target.y - this.y;
+      const d = Math.sqrt(dx**2+dy**2) || 1;
+      this.vx += (dx/d) * 0.06;
+      this.vy += (dy/d) * 0.06;
+    }
+
+    // Gentle slope wander when no target or timer fires
+    this.dirTimer -= dt;
+    if (this.dirTimer <= 0 || beat) {
+      // Pick a new diagonal: mostly horizontal, moderate vertical slope
+      const angle = rand(-0.35, 0.35) * Math.PI;
+      const sign = this.vx >= 0 ? 1 : -1;
+      // On beat: flip direction (whole school reverses!)
+      const newSign = beat ? -sign : sign;
+      this.vx += Math.cos(angle) * newSign * 0.3;
+      this.vy += Math.sin(angle) * 0.2;
+      this.dirTimer = rand(3, 6);
+    }
+
+    // Clamp speed
+    const spd = this.speed * (1 + mid * 0.6);
+    const len = Math.sqrt(this.vx**2+this.vy**2) || 1;
+    if (len > spd) { this.vx=(this.vx/len)*spd; this.vy=(this.vy/len)*spd; }
+
+    // Move leader
+    this.x += this.vx * dt * 60;
+    this.y += this.vy * dt * 60;
+
+    // Bounce off edges (keep school in the upper-mid water, away from floor)
+    const mx = 120, my = 80;
+    if (this.x < mx)      { this.vx =  Math.abs(this.vx); this.dirTimer = 0; }
+    if (this.x > W - mx)  { this.vx = -Math.abs(this.vx); this.dirTimer = 0; }
+    if (this.y < my)       { this.vy =  Math.abs(this.vy); }
+    if (this.y > H * 0.72) { this.vy = -Math.abs(this.vy); }
+  },
+
+  // Return the world-space formation position for slot index i,
+  // rotated so the V always points in the direction of travel.
+  slotPos(i) {
+    const slot = this.slots[i] || [0, 0];
+    // Rotate slot offset by current heading angle
+    const angle = Math.atan2(this.vy, this.vx);
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const rx = slot[0]*cos - slot[1]*sin;
+    const ry = slot[0]*sin + slot[1]*cos;
+    return { x: this.x + rx, y: this.y + ry };
+  }
+};
+
+// ─── Spawn entities ───────────────────────────────────────────────────────────
+// Spawn sharks clustered together near screen center
+const sharks = [
+  new Shark(W*0.5,       H*0.4,        '#4488ff', 'Daddy',   false),  // slot 0 — leader
+  new Shark(W*0.5-0.09,  H*0.4-0.05,  '#ff88bb', 'Mommy',   false),  // slot 1
+  new Shark(W*0.5-0.09,  H*0.4+0.05,  '#44cc66', 'Grandpa', false),  // slot 2
+  new Shark(W*0.5-0.18,  H*0.4-0.03,  '#ffdd00', 'Baby',    true),   // slot 3
+  new Shark(W*0.5-0.18,  H*0.4+0.03,  '#ff8833', 'Grandma', false),  // slot 4
+];
+
+const fishes    = Array.from({length:12}, () => new Fish());
+const turtles   = Array.from({length:3},  () => new Turtle());
+const crabs     = Array.from({length:2},  () => new Crab());
+const jellies   = Array.from({length:2},  () => new Jellyfish());
+const bubbles   = [];
+
+const seaweeds = Array.from({length:16}, (_, i) => {
+  const x = (i/15)*(W-100)+40+rand(-18,18);
+  return new Seaweed(x);
+});
+
+// ─── Background particles ─────────────────────────────────────────────────────
+const particles = Array.from({length:45}, () => ({
+  x: rand(0,W), y: rand(0,H),
+  char: ['·','·','·','*','+','.'][randInt(0,6)],
+  alpha: rand(0.04, 0.25),
+  color: `hsl(${randInt(160,220)},60%,70%)`
+}));
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+let lastTime = 0, t = 0;
+let bubbleTimer = 0;
+let respawnTimer = 0;
+
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, `hsl(200,50%,${4+bass*6}%)`);
+  grad.addColorStop(0.6, `hsl(185,60%,${3+bass*4}%)`);
+  grad.addColorStop(1, `hsl(170,50%,${2+bass*3}%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  particles.forEach(p => {
+    ctx.font = `10px monospace`;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = p.alpha*(1+treble*0.5);
+    ctx.fillText(p.char, p.x, p.y);
+  });
+  ctx.globalAlpha = 1;
+
+  // Sea floor
+  ctx.fillStyle = `hsl(170,40%,${8+bass*5}%)`;
+  ctx.fillRect(0, H-CELL_H*1.5, W, CELL_H*1.5);
+
+  // Wave line
+  ctx.beginPath();
+  for (let x=0; x<=W; x+=3) {
+    const y = 40 + Math.sin(x*0.02+t*0.5)*(5+bass*14);
+    x===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle = `hsla(185,70%,60%,${0.2+bass*0.35})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Title
+  ctx.save();
+  ctx.font = `bold 20px 'VT323', monospace`;
+  ctx.fillStyle = `hsla(39,100%,50%,1)`;
+  //ctx.shadowColor = '#ffee00';
+  //ctx.shadowBlur = bass > 0.4 ? 20 : 5;
+    ctx.fillText('🦈  BABY SHARK ASCII AQUARIUM  🦈', W/2-180, 30);
+  ctx.restore();
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now-lastTime)/1000, 0.05);
+  lastTime = now;
+  t += dt;
+
+  getAudioParams();
+
+  if (audioCtx && isPlaying) {
+    const cur = (audioCtx.currentTime - startTime) + pauseOffset;
+    document.getElementById('time-display').textContent =
+      `${Math.floor(cur/60)}:${Math.floor(cur%60).toString().padStart(2,'0')}`;
+  }
+
+  // Spawn bubbles
+  bubbleTimer -= dt;
+  if (bubbleTimer <= 0) {
+    const rate = 0.12 + treble * 0.04;
+    bubbleTimer = rand(rate, rate*2.5);
+    const src = Math.random() < 0.5 ? sharks[randInt(0,sharks.length)] : {x:rand(0,W), y:H};
+    bubbles.push(new Bubble(src.x, src.y-8));
+    if (treble > 0.35 && Math.random() < 0.5)
+      bubbles.push(new Bubble(rand(0,W), H-rand(10,50)));
+  }
+
+  // Respawn eaten fish
+  respawnTimer -= dt;
+  if (respawnTimer <= 0) {
+    respawnTimer = 3.5;
+    for (let i=fishes.length-1; i>=0; i--)
+      if (fishes[i].eaten) fishes[i] = new Fish();
+  }
+
+  // ── Draw ──
+  drawBackground();
+  seaweeds.forEach(sw => sw.draw(t));
+
+  // Bubbles (draw first so they appear behind creatures)
+  for (let i=bubbles.length-1; i>=0; i--) {
+    bubbles[i].update(dt);
+    if (bubbles[i].dead) { bubbles.splice(i,1); continue; }
+    bubbles[i].draw();
+  }
+
+  // Creatures
+  const preyList = [...fishes, ...turtles];
+  const alivePrey = preyList.filter(p=>!p.eaten);
+
+  // Update school leader first — it steers the whole group
+  school.update(dt, alivePrey);
+
+  jellies.forEach(j => { j.update(dt); j.draw(); });
+  fishes.forEach(f  => { f.update(dt, sharks); f.draw(); });
+  turtles.forEach(tu=> { tu.update(dt, sharks); tu.draw(); });
+  crabs.forEach(c   => { c.update(dt, sharks); c.draw(); });
+
+  // Sharks last (on top) — each follows its formation slot
+  sharks.forEach((s, i) => {
+    s.update(dt, i);
+    s.draw();
+  });
+
+  if (beat) {
+    ctx.fillStyle = `hsla(50,100%,90%,0.03)`;
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

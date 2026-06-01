@@ -132,11 +132,11 @@
 </div>
 
 <div id="controls">
-  <span style="font-size:10px;color:#00ffcc88">VOL</span>
+  <span style="font-size:10px;color:rgba(0,255,204,0.533)">VOL</span>
   <div id="volume-bar" onclick="setVolume(event)">
     <div id="volume-fill"></div>
   </div>
-  <span style="font-size:10px;color:#00ffcc88" id="time-display">0:00</span>
+  <span style="font-size:10px;color:rgba(0,255,204,0.533)" id="time-display">0:00</span>
 </div>
 
 <div id="subtitle"></div>
@@ -444,7 +444,7 @@ class Entity {
     this.frameTimer = 0;
   }
   normalizeSpeed(speed) {
-    const len = Math.sqrt(this.vx**2 + this.vy**2) || 1;
+    const len = Math.sqrt((this.vx*this.vx + this.vy*this.vy)) || 1;
     this.vx = (this.vx/len)*speed;
     this.vy = (this.vy/len)*speed;
   }
@@ -499,7 +499,7 @@ class Shark extends Entity {
 
     // Steer strongly toward formation slot
     const dx = target.x - this.x, dy = target.y - this.y;
-    const dist = Math.sqrt(dx**2+dy**2) || 1;
+    const dist = Math.sqrt((dx*dx + dy*dy)) || 1;
 
     // Strong pull toward slot — the further away, the harder the pull
     const pull = Math.min(dist * 0.08, 0.6);
@@ -511,7 +511,7 @@ class Shark extends Entity {
     this.vy += school.vy * 0.08;
 
     // Clamp to speed
-    const len = Math.sqrt(this.vx**2+this.vy**2) || 1;
+    const len = Math.sqrt((this.vx*this.vx + this.vy*this.vy)) || 1;
     if (len > speed*1.5) { this.vx=(this.vx/len)*speed*1.5; this.vy=(this.vy/len)*speed*1.5; }
 
     this.x += this.vx * dt * 60;
@@ -585,7 +585,7 @@ class Fish extends Entity {
       if (d < nearestDist) nearestDist = d;
       if (d < 200) {
         this.fleeing = true;
-        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt(dx**2+dy**2)||1;
+        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt((dx*dx + dy*dy))||1;
         this.vx += dx/dist*0.12;
         this.vy += dy/dist*0.12;
       }
@@ -599,7 +599,7 @@ class Fish extends Entity {
 
     // Hard speed cap
     const maxSpd = this.fleeing ? 2.0 : 1.2;
-    const len = Math.sqrt(this.vx**2+this.vy**2)||1;
+    const len = Math.sqrt((this.vx*this.vx + this.vy*this.vy))||1;
     if (len > maxSpd) { this.vx=(this.vx/len)*maxSpd; this.vy=(this.vy/len)*maxSpd; }
 
     this.move(dt);
@@ -639,7 +639,7 @@ class Turtle extends Entity {
     sharks.forEach(s => {
       const d = Math.hypot(s.x-this.x, s.y-this.y);
       if (d < 200) {
-        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt(dx**2+dy**2)||1;
+        const dx=this.x-s.x, dy=this.y-s.y, dist=Math.sqrt((dx*dx + dy*dy))||1;
         this.vx += dx/dist*0.09;
         this.vy += dy/dist*0.09;
         this.fleeing = true;
@@ -647,7 +647,7 @@ class Turtle extends Entity {
     });
     this.updateDir(dt, this.fleeing ? this.speed*1.7 : this.speed);
     const maxSpd = this.fleeing ? 0.9 : 0.55;
-    const len = Math.sqrt(this.vx**2+this.vy**2)||1;
+    const len = Math.sqrt((this.vx*this.vx + this.vy*this.vy))||1;
     if (len > maxSpd) { this.vx=(this.vx/len)*maxSpd; this.vy=(this.vy/len)*maxSpd; }
     this.move(dt);
     this.advanceFrame(dt, 1.2);
@@ -853,7 +853,7 @@ const school = {
       alive.forEach(p => {
         const dx = p.x - this.x, dy = p.y - this.y;
         const dot = dx * this.vx + dy * this.vy; // ahead of school?
-        const dist = Math.sqrt(dx**2+dy**2) || 1;
+        const dist = Math.sqrt((dx*dx + dy*dy)) || 1;
         const score = dot / dist - dist * 0.001;
         if (score > bestScore) { bestScore = score; best = p; }
       });
@@ -863,7 +863,7 @@ const school = {
     // Steer toward target (or wander if none)
     if (this.target) {
       const dx = this.target.x - this.x, dy = this.target.y - this.y;
-      const d = Math.sqrt(dx**2+dy**2) || 1;
+      const d = Math.sqrt((dx*dx + dy*dy)) || 1;
       this.vx += (dx/d) * 0.06;
       this.vy += (dy/d) * 0.06;
     }
@@ -883,7 +883,7 @@ const school = {
 
     // Clamp speed
     const spd = this.speed * (1 + mid * 0.6);
-    const len = Math.sqrt(this.vx**2+this.vy**2) || 1;
+    const len = Math.sqrt((this.vx*this.vx + this.vy*this.vy)) || 1;
     if (len > spd) { this.vx=(this.vx/len)*spd; this.vy=(this.vy/len)*spd; }
 
     // Move leader

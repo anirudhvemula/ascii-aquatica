@@ -9,13 +9,128 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #001a1a; overflow: hidden; }
   #canvas { display: block; width: 100vw; height: 100vh; }
+
+  #start-screen {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    background: rgba(0,10,10,0.82);
+    z-index: 999;
+    cursor: pointer;
+  }
+  #start-msg {
+    font-family: 'VT323', monospace;
+    font-size: 52px;
+    color: #00ffcc;
+    text-shadow: 0 0 18px #00ffcc, 0 0 40px #00ffcc;
+    text-align: center;
+    letter-spacing: 6px;
+    -webkit-animation: pulse 1.4s ease-in-out infinite;
+    animation: pulse 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @-webkit-keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
 </style>
 </head>
 <body>
+
 <canvas id="canvas"></canvas>
+<audio id="bgm" src="BabySharkSong.mp3" loop></audio>
+
+<div id="start-screen">
+  <div id="start-msg">TAP TO START</div>
+</div>
+
 <script>
-// Audio stubs — kept at 0 so glow/sway multipliers in draw code still work
+// ─── Audio state ──────────────────────────────────────────────────────────────
 var bass = 0, mid = 0, treble = 0, beat = false;
+var beatCooldown = 0, lastBeatEnergy = 0;
+var analyser = null, audioData = null;
+
+function initAudio() {
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+
+  // No Web Audio API — plain HTML element fallback
+  if (!AudioCtx) {
+    try { document.getElementById('bgm').play(); } catch(e) {}
+    return;
+  }
+
+  var actx = new AudioCtx();
+  try { actx.resume(); } catch(e) {}  // iOS starts context suspended
+
+  analyser = actx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.connect(actx.destination);
+  audioData = new Uint8Array(analyser.frequencyBinCount);
+
+  // XHR + decodeAudioData + BufferSourceNode — avoids createMediaElementSource
+  // which silently breaks audio on iOS Safari 10
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', 'BabySharkSong.mp3', true);
+  xhr.responseType = 'arraybuffer';
+  xhr.onload = function() {
+    // Use callback form — Safari 10 doesn't support Promise form
+    actx.decodeAudioData(xhr.response,
+      function(buffer) {
+        var src = actx.createBufferSource();
+        src.buffer = buffer;
+        src.loop   = true;
+        src.connect(analyser);
+        src.start(0);
+      },
+      function() { /* decode failed */ }
+    );
+  };
+  xhr.onerror = function() {
+    // XHR blocked (e.g. file:// protocol) — fall back to plain element
+    analyser = null; audioData = null;
+    try { document.getElementById('bgm').play(); } catch(e) {}
+  };
+  xhr.send();
+}
+
+function getAudioParams() {
+  if (!analyser || !audioData) return;
+  analyser.getByteFrequencyData(audioData);
+  var len = audioData.length;
+  var bassEnd = Math.floor(len * 0.03);
+  var midEnd  = Math.floor(len * 0.3);
+  var b=0, m=0, t=0;
+  for (var i=0;       i<bassEnd; i++) b += audioData[i];
+  for (var i=bassEnd; i<midEnd;  i++) m += audioData[i];
+  for (var i=midEnd;  i<len;     i++) t += audioData[i];
+  bass   = b / bassEnd / 255;
+  mid    = m / (midEnd - bassEnd) / 255;
+  treble = t / (len - midEnd) / 255;
+
+  if (beatCooldown > 0) { beatCooldown--; beat = false; }
+  else {
+    var energy = bass;
+    if (energy > lastBeatEnergy * 1.4 && energy > 0.3) {
+      beat = true; beatCooldown = 15;
+    } else { beat = false; }
+    lastBeatEnergy = lastBeatEnergy * 0.9 + energy * 0.1;
+  }
+}
+
+// ─── Tap-to-start ─────────────────────────────────────────────────────────────
+document.getElementById('start-screen').addEventListener('click', function() {
+  initAudio();
+  this.style.display = 'none';
+});
 
 // ─── Canvas ───────────────────────────────────────────────────────────────────
 var canvas = document.getElementById('canvas');
@@ -99,10 +214,10 @@ class Entity {
   }
   move(dt) {
     this.x += this.vx*dt*60; this.y += this.vy*dt*60;
-    if (this.x < 90)      { this.vx =  Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
-    if (this.x > W-90)    { this.vx = -Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
-    if (this.y < 70)      { this.vy =  Math.abs(this.vy); }
-    if (this.y > H-130)   { this.vy = -Math.abs(this.vy)-0.2; this.dirTimer=0; }
+    if (this.x < 90)    { this.vx =  Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
+    if (this.x > W-90)  { this.vx = -Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
+    if (this.y < 70)    { this.vy =  Math.abs(this.vy); }
+    if (this.y > H-130) { this.vy = -Math.abs(this.vy)-0.2; this.dirTimer=0; }
   }
   advanceFrame(dt, fps) {
     this.frameTimer += dt;
@@ -121,7 +236,7 @@ class Shark extends Entity {
     this.normalizeSpeed(this.speed);
   }
   update(dt, slotIndex) {
-    var spd=this.speed, tgt=school.slotPos(slotIndex);
+    var spd=this.speed*(1+mid*0.7), tgt=school.slotPos(slotIndex);
     var dx=tgt.x-this.x, dy=tgt.y-this.y;
     var dist=Math.sqrt(dx*dx+dy*dy)||1;
     var pull=Math.min(dist*0.08,0.6);
@@ -134,15 +249,16 @@ class Shark extends Entity {
     if(this.x>W-30)  this.vx-=0.4;
     if(this.y<30)    this.vy+=0.4;
     if(this.y>H-60)  this.vy-=0.4;
-    this.advanceFrame(dt,2.5);
+    this.advanceFrame(dt, 2.5+mid*3);
+    this.pulseScale = 1 + bass*0.1;
   }
   draw() {
     var r=this.vx>=0;
     var fs=this.isBaby?(r?BABY_FRAMES.right:BABY_FRAMES.left):(r?SHARK_FRAMES.right:SHARK_FRAMES.left);
     var lines=fs[0], sz=Math.round(FONT_SIZE*this.scale), lh=sz*1.3;
-    ctx.save(); ctx.translate(this.x,this.y);
+    ctx.save(); ctx.translate(this.x,this.y); ctx.scale(this.pulseScale,this.pulseScale);
     ctx.font=sz+"px 'Share Tech Mono', monospace";
-    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=10;
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=10+bass*16;
     for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*lh);
     ctx.font='bold '+Math.round(9*this.scale)+"px 'Share Tech Mono', monospace";
     ctx.shadowBlur=3; ctx.globalAlpha=0.9;
@@ -172,7 +288,7 @@ class Fish extends Entity {
       if(d<200){this.fleeing=true;this.vx+=dx/d*0.12;this.vy+=dy/d*0.12;}
       if(d<28) this.eaten=true;
     }
-    this.updateDir(dt,this.fleeing?this.speed*2:this.speed);
+    this.updateDir(dt,this.fleeing?this.speed*2:this.speed*(1+mid*0.3));
     var mx=this.fleeing?2.0:1.2, len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
     if(len>mx){this.vx=(this.vx/len)*mx;this.vy=(this.vy/len)*mx;}
     this.move(dt); this.advanceFrame(dt,1.2);
@@ -200,7 +316,7 @@ class Turtle extends Entity {
   update(dt, sharks) {
     this.fleeing=false;
     for(var s=0;s<sharks.length;s++){
-      var dx=this.x-sharks[s].x,dy=this.y-sharks[s].y;
+      var dx=this.x-sharks[s].x, dy=this.y-sharks[s].y;
       var d=Math.sqrt(dx*dx+dy*dy)||1;
       if(d<200){this.vx+=dx/d*0.09;this.vy+=dy/d*0.09;this.fleeing=true;}
     }
@@ -213,7 +329,7 @@ class Turtle extends Entity {
     var lines=this.vx>=0?TURTLE_CHARS.right:TURTLE_CHARS.left;
     ctx.save(); ctx.translate(this.x,this.y);
     ctx.font=(FONT_SIZE+1)+"px 'Share Tech Mono', monospace";
-    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=7;
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=7+bass*6;
     for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*CELL_H);
     ctx.restore();
   }
@@ -231,15 +347,15 @@ class Crab extends Entity {
     this.dirTimer-=dt;
     if(this.dirTimer<=0||beat){this.vx=-this.vx;this.dirTimer=rand(2,5);}
     for(var s=0;s<sharks.length;s++){
-      var dx=this.x-sharks[s].x,dy=this.y-sharks[s].y;
+      var dx=this.x-sharks[s].x, dy=this.y-sharks[s].y;
       if(Math.sqrt(dx*dx+dy*dy)<130)
         this.vx=(this.x>sharks[s].x?1:-1)*this.speed*1.8;
     }
     var av=Math.abs(this.vx); if(av>1.2) this.vx=(this.vx/av)*1.2;
     this.x+=this.vx*dt*60;
     this.y=this.baseY+Math.sin(globalT*2+this.x*0.05)*3;
-    if(this.x<20)  this.vx= Math.abs(this.vx);
-    if(this.x>W-20)this.vx=-Math.abs(this.vx);
+    if(this.x<20)   this.vx= Math.abs(this.vx);
+    if(this.x>W-20) this.vx=-Math.abs(this.vx);
     this.advanceFrame(dt,2.5);
   }
   draw() {
@@ -273,18 +389,18 @@ class Jellyfish extends Entity {
       this.vy=Math.sin(a)*this.speed*0.3;
       this.dirTimer=rand(3,7);
     }
-    if(this.x<60)       this.vx= Math.abs(this.vx);
-    if(this.x>W-60)     this.vx=-Math.abs(this.vx);
-    if(this.baseY<60)   this.vy= Math.abs(this.vy);
-    if(this.baseY>H*0.7)this.vy=-Math.abs(this.vy);
-    this.advanceFrame(dt,1.2);
+    if(this.x<60)        this.vx= Math.abs(this.vx);
+    if(this.x>W-60)      this.vx=-Math.abs(this.vx);
+    if(this.baseY<60)    this.vy= Math.abs(this.vy);
+    if(this.baseY>H*0.7) this.vy=-Math.abs(this.vy);
+    this.advanceFrame(dt, 1.2+bass*1.5);
   }
   draw() {
     var lines=JELLY_FRAMES[this.frame%2];
     ctx.save(); ctx.translate(this.x,this.y);
     ctx.font=FONT_SIZE+"px 'Share Tech Mono', monospace";
-    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=8;
-    ctx.globalAlpha=0.85;
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color;
+    ctx.shadowBlur=6+bass*18+treble*8; ctx.globalAlpha=0.85+bass*0.15;
     for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*CELL_H);
     ctx.globalAlpha=1; ctx.restore();
   }
@@ -301,7 +417,7 @@ class Bubble {
     this.dead=false;
   }
   update(dt) {
-    this.x+=this.vx*dt*60; this.y+=this.vy*dt*60;
+    this.x+=this.vx*dt*60; this.y+=this.vy*dt*60*(1+treble*0.8);
     this.life-=dt*this.decay; this.vx+=rand(-0.015,0.015);
     if(this.life<=0) this.dead=true;
   }
@@ -325,10 +441,10 @@ class Seaweed {
     for(var i=0;i<this.height;i++) this.segments.push({offset:rand(0,Math.PI)});
   }
   draw(t) {
-    var sway=7;
+    var sway=(bass*22+7)*(1+mid*0.4);
     ctx.save();
     ctx.font=(FONT_SIZE+2)+"px 'Share Tech Mono', monospace";
-    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=5;
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=5+bass*8;
     for(var i=0;i<this.height;i++){
       var off=this.segments[i].offset, yf=i/this.height;
       var sw=Math.sin(t*this.speed+this.phase+off);
@@ -340,7 +456,7 @@ class Seaweed {
   }
 }
 
-// ─── School (shark formation) ─────────────────────────────────────────────────
+// ─── School ───────────────────────────────────────────────────────────────────
 var school = {
   x:0,y:0, vx:1.0,vy:0.35, speed:1.2, dirTimer:0, target:null,
   slots:[[0,0],[-120,-55],[-120,55],[-240,-28],[-240,28]],
@@ -365,21 +481,22 @@ var school = {
     }
     this.dirTimer-=dt;
     if(this.dirTimer<=0){
-      var a=rand(-0.35,0.35)*Math.PI,sign=this.vx>=0?1:-1;
+      var a=rand(-0.35,0.35)*Math.PI, sign=this.vx>=0?1:-1;
       this.vx+=Math.cos(a)*sign*0.3; this.vy+=Math.sin(a)*0.2;
       this.dirTimer=rand(3,6);
     }
+    var spd=this.speed*(1+mid*0.6);
     var len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
-    if(len>this.speed){this.vx=(this.vx/len)*this.speed;this.vy=(this.vy/len)*this.speed;}
+    if(len>spd){this.vx=(this.vx/len)*spd;this.vy=(this.vy/len)*spd;}
     this.x+=this.vx*dt*60; this.y+=this.vy*dt*60;
-    if(this.x<120)     {this.vx= Math.abs(this.vx);this.dirTimer=0;}
-    if(this.x>W-120)   {this.vx=-Math.abs(this.vx);this.dirTimer=0;}
-    if(this.y<80)       this.vy= Math.abs(this.vy);
-    if(this.y>H*0.72)   this.vy=-Math.abs(this.vy);
+    if(this.x<120)    {this.vx= Math.abs(this.vx);this.dirTimer=0;}
+    if(this.x>W-120)  {this.vx=-Math.abs(this.vx);this.dirTimer=0;}
+    if(this.y<80)      this.vy= Math.abs(this.vy);
+    if(this.y>H*0.72)  this.vy=-Math.abs(this.vy);
   },
   slotPos:function(i){
     var sl=this.slots[i]||[0,0], a=Math.atan2(this.vy,this.vx);
-    var cos=Math.cos(a),sin=Math.sin(a);
+    var cos=Math.cos(a), sin=Math.sin(a);
     return{x:this.x+sl[0]*cos-sl[1]*sin, y:this.y+sl[0]*sin+sl[1]*cos};
   }
 };
@@ -407,7 +524,7 @@ function initScene(){
   particles=[];
   var pchars=['\u00b7','\u00b7','\u00b7','*','+','.'];
   for(var i=0;i<45;i++) particles.push({
-    x:rand(0,W),y:rand(0,H),
+    x:rand(0,W), y:rand(0,H),
     char:pchars[randInt(0,6)],
     alpha:rand(0.04,0.25),
     color:'hsl('+randInt(160,220)+',60%,70%)'
@@ -417,32 +534,34 @@ function initScene(){
 // ─── Draw background ──────────────────────────────────────────────────────────
 function drawBackground(){
   var g=ctx.createLinearGradient(0,0,0,H);
-  g.addColorStop(0,  'hsl(200,50%,4%)');
-  g.addColorStop(0.6,'hsl(185,60%,3%)');
-  g.addColorStop(1,  'hsl(170,50%,2%)');
+  g.addColorStop(0,  'hsl(200,50%,'+(4+bass*6)+'%)');
+  g.addColorStop(0.6,'hsl(185,60%,'+(3+bass*4)+'%)');
+  g.addColorStop(1,  'hsl(170,50%,'+(2+bass*3)+'%)');
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 
   for(var i=0;i<particles.length;i++){
     var p=particles[i];
-    ctx.font='10px monospace'; ctx.fillStyle=p.color; ctx.globalAlpha=p.alpha;
+    ctx.font='10px monospace'; ctx.fillStyle=p.color;
+    ctx.globalAlpha=p.alpha*(1+treble*0.5);
     ctx.fillText(p.char,p.x,p.y);
   }
   ctx.globalAlpha=1;
 
-  ctx.fillStyle='hsl(170,40%,8%)';
+  ctx.fillStyle='hsl(170,40%,'+(8+bass*5)+'%)';
   ctx.fillRect(0,H-CELL_H*1.5,W,CELL_H*1.5);
 
   ctx.beginPath();
   for(var x=0;x<=W;x+=3){
-    var y=40+Math.sin(x*0.02+globalT*0.5)*5;
+    var y=40+Math.sin(x*0.02+globalT*0.5)*(5+bass*14);
     if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
   }
-  ctx.strokeStyle='hsla(185,70%,60%,0.2)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.strokeStyle='hsla(185,70%,60%,'+(0.2+bass*0.35)+')';
+  ctx.lineWidth=1; ctx.stroke();
 
   ctx.save();
   ctx.font="bold 20px 'VT323', monospace";
   ctx.fillStyle='hsl(39,100%,50%)';
-  ctx.fillText('BABY SHARK ASCII AQUARIUM', W/2-160, 30);
+  ctx.fillText('BABY SHARK ASCII AQUARIUM by Ani Vemula', W/2-160, 30);
   ctx.restore();
 }
 
@@ -452,11 +571,16 @@ function loop(now){
   var dt=Math.min((now-lastTime)/1000,0.05);
   lastTime=now; globalT+=dt;
 
+  getAudioParams();
+
   bubbleTimer-=dt;
   if(bubbleTimer<=0){
-    bubbleTimer=rand(0.12,0.3);
+    var rate=0.12+treble*0.04;
+    bubbleTimer=rand(rate,rate*2.5);
     var src=Math.random()<0.5?sharks[randInt(0,sharks.length)]:{x:rand(0,W),y:H};
     bubbles.push(new Bubble(src.x,src.y-8));
+    if(treble>0.35&&Math.random()<0.5)
+      bubbles.push(new Bubble(rand(0,W),H-rand(10,50)));
   }
 
   respawnTimer-=dt;
@@ -482,9 +606,14 @@ function loop(now){
   for(var i=0;i<turtles.length;i++) {turtles[i].update(dt,sharks);turtles[i].draw();}
   for(var i=0;i<crabs.length;i++)   {crabs[i].update(dt,sharks);crabs[i].draw();}
   for(var i=0;i<sharks.length;i++)  {sharks[i].update(dt,i);sharks[i].draw();}
+
+  if(beat){
+    ctx.fillStyle='hsla(50,100%,90%,0.03)';
+    ctx.fillRect(0,0,W,H);
+  }
 }
 
-// ─── Boot — wait for full page load so viewport dims are ready ────────────────
+// ─── Boot ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', function(){
   resize();
   initScene();

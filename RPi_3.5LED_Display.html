@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASCII Aquatica</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #001a1a; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+
+  #start-screen {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: -webkit-flex;
+    display: flex;
+    -webkit-align-items: center;
+    align-items: center;
+    -webkit-justify-content: center;
+    justify-content: center;
+    background: rgba(0,10,10,0.82);
+    z-index: 999;
+    cursor: pointer;
+  }
+  #start-msg {
+    font-family: 'VT323', monospace;
+    font-size: 28px;
+    color: #00ffcc;
+    text-shadow: 0 0 18px #00ffcc, 0 0 40px #00ffcc;
+    text-align: center;
+    letter-spacing: 6px;
+    -webkit-animation: pulse 1.4s ease-in-out infinite;
+    animation: pulse 1.4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @-webkit-keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+<audio id="bgm" src="BabySharkSong.mp3" loop></audio>
+
+<div id="start-screen">
+  <div id="start-msg">TAP TO START</div>
+</div>
+
+<script>
+// ─── Audio state ──────────────────────────────────────────────────────────────
+var bass = 0, mid = 0, treble = 0, beat = false;
+var beatCooldown = 0, lastBeatEnergy = 0;
+var analyser = null, audioData = null;
+
+function initAudio() {
+  var AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  var ctx2 = new AudioCtx();
+  var audio = document.getElementById('bgm');
+  try {
+    var source = ctx2.createMediaElementSource(audio);
+    analyser = ctx2.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    analyser.connect(ctx2.destination);
+    audioData = new Uint8Array(analyser.frequencyBinCount);
+  } catch(e) {
+    // Web Audio unavailable — animation still runs, just without reactivity
+  }
+  audio.play();
+}
+
+function getAudioParams() {
+  if (!analyser || !audioData) return;
+  analyser.getByteFrequencyData(audioData);
+  var len = audioData.length;
+  var bassEnd = Math.floor(len * 0.03);
+  var midEnd  = Math.floor(len * 0.3);
+  var b=0, m=0, t=0;
+  for (var i=0;       i<bassEnd; i++) b += audioData[i];
+  for (var i=bassEnd; i<midEnd;  i++) m += audioData[i];
+  for (var i=midEnd;  i<len;     i++) t += audioData[i];
+  bass   = b / bassEnd / 255;
+  mid    = m / (midEnd - bassEnd) / 255;
+  treble = t / (len - midEnd) / 255;
+
+  if (beatCooldown > 0) { beatCooldown--; beat = false; }
+  else {
+    var energy = bass;
+    if (energy > lastBeatEnergy * 1.4 && energy > 0.3) {
+      beat = true; beatCooldown = 15;
+    } else { beat = false; }
+    lastBeatEnergy = lastBeatEnergy * 0.9 + energy * 0.1;
+  }
+}
+
+// ─── Tap-to-start ─────────────────────────────────────────────────────────────
+document.getElementById('start-screen').addEventListener('click', function() {
+  initAudio();
+  this.style.display = 'none';
+});
+
+// ─── Canvas ───────────────────────────────────────────────────────────────────
+var canvas = document.getElementById('canvas');
+var ctx    = canvas.getContext('2d');
+var W, H, CELL_W, CELL_H;
+var FONT_SIZE = 8;
+var FONT = FONT_SIZE + "px 'Share Tech Mono', monospace";
+
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  W = canvas.width; H = canvas.height;
+  CELL_W = 4.8; CELL_H = FONT_SIZE * 1.2;
+  ctx.font = FONT;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function rand(a, b)    { return a + Math.random() * (b - a); }
+function randInt(a, b) { return Math.floor(rand(a, b)); }
+
+// ─── ASCII Art ────────────────────────────────────────────────────────────────
+var SHARK_FRAMES = {
+  right: [['     /"*._         _   ',
+           '  .-*\'`    `*-.._.-\'/ ',
+           '< * ))     ,       (',
+           ' `*-._`._(__.--*"`.\\ ']],
+  left:  [['  _         _.*"\\  ',
+           '\\`-.._.-\'*`    `*-.',
+           ' )       ,     (( * >',
+           ' /.*"`--.(__._`-.*` ']]
+};
+var BABY_FRAMES = {
+  right: [['   ,-,        ',
+           ' ,/.(    __   ',
+           ",-'  `!._/ /  ",
+           '> @ )<|   _ < ',
+           " `-..,,;' \\_\\ "]],
+  left:  [['        ,-,   ',
+           '   __    ).\\, ',
+           "  \\ \\_._!`  `-,",
+           ' > _   |>( @ <',
+           " /_/ `;,,..`-' "]]
+};
+var FISH_FRAMES_R = ["><(((°>", "><((°>", "><(°>"];
+var FISH_FRAMES_L = ["<°)))><", "<°))><", "<°)><"];
+var TURTLE_CHARS = {
+  right: ["   __   ","  /  \\  ","=( °w°)=>","  \\__/  "," _|  |_ "],
+  left:  ["   __   ","  /  \\  ","<=( w° )=","  \\__/  "," _|  |_ "]
+};
+var CRAB_CHARS = [
+  [" /V\\ ","(o¥o)"," \\_/ "," d b "],
+  [" \\V/ ","(o¥o)"," \\_/ "," b d "]
+];
+var BUBBLE_CHARS = ["o","O","\u00b0","\u00b7","\u25cb","o"];
+var JELLY_FRAMES = [
+  ["  _~~_  "," (o  o) ","  \\__/  "," | || | ","  \\  /  "],
+  ["  _~~_  "," (o  o) ","  \\__/  "," /|  |\\ ","  /  \\  "]
+];
+
+// ─── Entity base ──────────────────────────────────────────────────────────────
+class Entity {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.vx = rand(-1,1); this.vy = rand(-0.3,0.3);
+    this.dirTimer = rand(2,5);
+    this.frame = 0; this.frameTimer = 0;
+  }
+  normalizeSpeed(speed) {
+    var len = Math.sqrt(this.vx*this.vx + this.vy*this.vy) || 1;
+    this.vx = (this.vx/len)*speed; this.vy = (this.vy/len)*speed;
+  }
+  updateDir(dt, speed) {
+    this.dirTimer -= dt;
+    if (this.dirTimer <= 0 || beat) {
+      var angle = rand(-0.45,0.45)*Math.PI;
+      this.vx = Math.cos(angle)*(Math.random()<0.5?1:-1);
+      this.vy = Math.sin(angle);
+      this.normalizeSpeed(speed);
+      this.dirTimer = rand(2.5,5.5);
+    }
+  }
+  move(dt) {
+    this.x += this.vx*dt*60; this.y += this.vy*dt*60;
+    if (this.x < 45)    { this.vx =  Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
+    if (this.x > W-45)  { this.vx = -Math.abs(this.vx); this.dirTimer=rand(1.5,3); }
+    if (this.y < 35)    { this.vy =  Math.abs(this.vy); }
+    if (this.y > H-65)  { this.vy = -Math.abs(this.vy)-0.2; this.dirTimer=0; }
+  }
+  advanceFrame(dt, fps) {
+    this.frameTimer += dt;
+    if (this.frameTimer > 1/fps) { this.frameTimer=0; this.frame=(this.frame+1)%2; }
+  }
+}
+
+// ─── Shark ────────────────────────────────────────────────────────────────────
+class Shark extends Entity {
+  constructor(x, y, color, name, isBaby) {
+    super(x, y);
+    this.color=color; this.name=name; this.isBaby=isBaby;
+    this.scale=isBaby?1.0:1.15; this.speed=isBaby?1.5:1.1; this.pulseScale=1;
+    var a=rand(0,Math.PI*2);
+    this.vx=Math.cos(a)*this.speed; this.vy=Math.sin(a)*0.4;
+    this.normalizeSpeed(this.speed);
+  }
+  update(dt, slotIndex) {
+    var spd=this.speed*(1+mid*0.7), tgt=school.slotPos(slotIndex);
+    var dx=tgt.x-this.x, dy=tgt.y-this.y;
+    var dist=Math.sqrt(dx*dx+dy*dy)||1;
+    var pull=Math.min(dist*0.08,0.6);
+    this.vx+=(dx/dist)*pull; this.vy+=(dy/dist)*pull;
+    this.vx+=school.vx*0.08; this.vy+=school.vy*0.08;
+    var len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
+    if(len>spd*1.5){this.vx=(this.vx/len)*spd*1.5;this.vy=(this.vy/len)*spd*1.5;}
+    this.x+=this.vx*dt*60; this.y+=this.vy*dt*60;
+    if(this.x<15)    this.vx+=0.4;
+    if(this.x>W-15)  this.vx-=0.4;
+    if(this.y<15)    this.vy+=0.4;
+    if(this.y>H-30)  this.vy-=0.4;
+    this.advanceFrame(dt, 2.5+mid*3);
+    this.pulseScale = 1 + bass*0.1;
+  }
+  draw() {
+    var r=this.vx>=0;
+    var fs=this.isBaby?(r?BABY_FRAMES.right:BABY_FRAMES.left):(r?SHARK_FRAMES.right:SHARK_FRAMES.left);
+    var lines=fs[0], sz=Math.round(FONT_SIZE*this.scale), lh=sz*1.3;
+    ctx.save(); ctx.translate(this.x,this.y); ctx.scale(this.pulseScale,this.pulseScale);
+    ctx.font=sz+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=10+bass*16;
+    for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*lh);
+    ctx.font='bold '+Math.round(9*this.scale)+"px 'Share Tech Mono', monospace";
+    ctx.shadowBlur=3; ctx.globalAlpha=0.9;
+    ctx.fillText(this.name,0,lines.length*lh+4);
+    ctx.globalAlpha=1; ctx.restore();
+  }
+}
+
+// ─── Fish ─────────────────────────────────────────────────────────────────────
+class Fish extends Entity {
+  constructor() {
+    super(rand(120,W-120),rand(80,H*0.65));
+    this.type=randInt(0,FISH_FRAMES_R.length);
+    this.speed=rand(0.55,1.1);
+    this.color='hsl('+randInt(0,360)+',80%,70%)';
+    this.eaten=false; this.fleeing=false;
+    this.normalizeSpeed(this.speed);
+    var a=rand(-0.3,0.3)*Math.PI;
+    this.vx=Math.cos(a)*(Math.random()<0.5?1:-1)*this.speed;
+    this.vy=Math.sin(a)*this.speed;
+  }
+  update(dt, sharks) {
+    this.fleeing=false;
+    for(var s=0;s<sharks.length;s++){
+      var dx=this.x-sharks[s].x, dy=this.y-sharks[s].y;
+      var d=Math.sqrt(dx*dx+dy*dy)||1;
+      if(d<200){this.fleeing=true;this.vx+=dx/d*0.12;this.vy+=dy/d*0.12;}
+      if(d<28) this.eaten=true;
+    }
+    this.updateDir(dt,this.fleeing?this.speed*2:this.speed*(1+mid*0.3));
+    var mx=this.fleeing?2.0:1.2, len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
+    if(len>mx){this.vx=(this.vx/len)*mx;this.vy=(this.vy/len)*mx;}
+    this.move(dt); this.advanceFrame(dt,1.2);
+  }
+  draw() {
+    var c=(this.vx>=0?FISH_FRAMES_R:FISH_FRAMES_L)[this.type%FISH_FRAMES_R.length];
+    ctx.save(); ctx.translate(this.x,this.y);
+    ctx.font=FONT; ctx.fillStyle=this.color;
+    ctx.shadowColor=this.color; ctx.shadowBlur=this.fleeing?10:3;
+    ctx.fillText(c,0,0); ctx.restore();
+  }
+}
+
+// ─── Turtle ───────────────────────────────────────────────────────────────────
+class Turtle extends Entity {
+  constructor() {
+    super(rand(100,W-100),rand(H*0.35,H*0.72));
+    this.speed=rand(0.25,0.5);
+    this.color='hsl('+randInt(140,175)+',75%,55%)';
+    this.fleeing=false;
+    var sign=Math.random()<0.5?1:-1;
+    this.vx=sign*this.speed; this.vy=rand(-0.15,0.15)*this.speed;
+    this.normalizeSpeed(this.speed);
+  }
+  update(dt, sharks) {
+    this.fleeing=false;
+    for(var s=0;s<sharks.length;s++){
+      var dx=this.x-sharks[s].x, dy=this.y-sharks[s].y;
+      var d=Math.sqrt(dx*dx+dy*dy)||1;
+      if(d<200){this.vx+=dx/d*0.09;this.vy+=dy/d*0.09;this.fleeing=true;}
+    }
+    this.updateDir(dt,this.fleeing?this.speed*1.7:this.speed);
+    var mx=this.fleeing?0.9:0.55, len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
+    if(len>mx){this.vx=(this.vx/len)*mx;this.vy=(this.vy/len)*mx;}
+    this.move(dt); this.advanceFrame(dt,1.2);
+  }
+  draw() {
+    var lines=this.vx>=0?TURTLE_CHARS.right:TURTLE_CHARS.left;
+    ctx.save(); ctx.translate(this.x,this.y);
+    ctx.font=(FONT_SIZE+1)+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=7+bass*6;
+    for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*CELL_H);
+    ctx.restore();
+  }
+}
+
+// ─── Crab ─────────────────────────────────────────────────────────────────────
+class Crab extends Entity {
+  constructor() {
+    super(rand(60,W-60),H*0.88+rand(-20,10));
+    this.speed=rand(0.35,0.65); this.vy=0;
+    this.vx=Math.random()<0.5?this.speed:-this.speed;
+    this.color='#ff6644'; this.dirTimer=rand(1.5,4); this.baseY=this.y;
+  }
+  update(dt, sharks) {
+    this.dirTimer-=dt;
+    if(this.dirTimer<=0||beat){this.vx=-this.vx;this.dirTimer=rand(2,5);}
+    for(var s=0;s<sharks.length;s++){
+      var dx=this.x-sharks[s].x, dy=this.y-sharks[s].y;
+      if(Math.sqrt(dx*dx+dy*dy)<130)
+        this.vx=(this.x>sharks[s].x?1:-1)*this.speed*1.8;
+    }
+    var av=Math.abs(this.vx); if(av>1.2) this.vx=(this.vx/av)*1.2;
+    this.x+=this.vx*dt*60;
+    this.y=this.baseY+Math.sin(globalT*2+this.x*0.05)*3;
+    if(this.x<20)   this.vx= Math.abs(this.vx);
+    if(this.x>W-20) this.vx=-Math.abs(this.vx);
+    this.advanceFrame(dt,2.5);
+  }
+  draw() {
+    var lines=CRAB_CHARS[this.frame%2];
+    ctx.save(); ctx.translate(this.x,this.y);
+    ctx.font=(FONT_SIZE+2)+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=10;
+    for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*CELL_H);
+    ctx.restore();
+  }
+}
+
+// ─── Jellyfish ────────────────────────────────────────────────────────────────
+class Jellyfish extends Entity {
+  constructor() {
+    super(rand(80,W-80),rand(H*0.1,H*0.65));
+    this.speed=rand(0.15,0.35);
+    this.color='hsl('+randInt(270,330)+',80%,75%)';
+    this.phase=rand(0,Math.PI*2); this.baseY=this.y;
+    this.bobAmp=rand(8,20); this.bobSpeed=rand(0.4,0.9);
+    this.normalizeSpeed(this.speed);
+  }
+  update(dt) {
+    this.x+=this.vx*dt*60*0.5;
+    this.y=this.baseY+Math.sin(globalT*this.bobSpeed+this.phase)*this.bobAmp;
+    this.baseY+=this.vy*dt*60*0.3;
+    this.dirTimer-=dt;
+    if(this.dirTimer<=0){
+      var a=rand(-0.3,0.3)*Math.PI;
+      this.vx=Math.cos(a)*(Math.random()<0.5?1:-1)*this.speed;
+      this.vy=Math.sin(a)*this.speed*0.3;
+      this.dirTimer=rand(3,7);
+    }
+    if(this.x<60)        this.vx= Math.abs(this.vx);
+    if(this.x>W-60)      this.vx=-Math.abs(this.vx);
+    if(this.baseY<60)    this.vy= Math.abs(this.vy);
+    if(this.baseY>H*0.7) this.vy=-Math.abs(this.vy);
+    this.advanceFrame(dt, 1.2+bass*1.5);
+  }
+  draw() {
+    var lines=JELLY_FRAMES[this.frame%2];
+    ctx.save(); ctx.translate(this.x,this.y);
+    ctx.font=FONT_SIZE+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color;
+    ctx.shadowBlur=6+bass*18+treble*8; ctx.globalAlpha=0.85+bass*0.15;
+    for(var i=0;i<lines.length;i++) ctx.fillText(lines[i],0,i*CELL_H);
+    ctx.globalAlpha=1; ctx.restore();
+  }
+}
+
+// ─── Bubble ───────────────────────────────────────────────────────────────────
+class Bubble {
+  constructor(x, y) {
+    this.x=x+rand(-12,12); this.y=y;
+    this.vy=rand(-0.4,-1.1); this.vx=rand(-0.08,0.08);
+    this.life=rand(0.8,1.0); this.decay=rand(0.06,0.14);
+    this.char=BUBBLE_CHARS[randInt(0,BUBBLE_CHARS.length)];
+    this.size=randInt(10,20); this.hue=randInt(160,220);
+    this.dead=false;
+  }
+  update(dt) {
+    this.x+=this.vx*dt*60; this.y+=this.vy*dt*60*(1+treble*0.8);
+    this.life-=dt*this.decay; this.vx+=rand(-0.015,0.015);
+    if(this.life<=0) this.dead=true;
+  }
+  draw() {
+    var alpha=Math.max(0,Math.min(1,this.life));
+    ctx.save();
+    ctx.font=this.size+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle='hsla('+this.hue+',80%,80%,'+alpha+')';
+    ctx.shadowColor='hsl('+this.hue+',80%,80%)'; ctx.shadowBlur=5;
+    ctx.fillText(this.char,this.x,this.y); ctx.restore();
+  }
+}
+
+// ─── Seaweed ──────────────────────────────────────────────────────────────────
+class Seaweed {
+  constructor(x) {
+    this.baseX=x; this.height=randInt(6,13);
+    this.phase=rand(0,Math.PI*2); this.speed=rand(0.4,1.1);
+    this.color='hsl('+randInt(110,155)+',80%,50%)';
+    this.segments=[];
+    for(var i=0;i<this.height;i++) this.segments.push({offset:rand(0,Math.PI)});
+  }
+  draw(t) {
+    var sway=(bass*22+7)*(1+mid*0.4);
+    ctx.save();
+    ctx.font=(FONT_SIZE+2)+"px 'Share Tech Mono', monospace";
+    ctx.fillStyle=this.color; ctx.shadowColor=this.color; ctx.shadowBlur=5+bass*8;
+    for(var i=0;i<this.height;i++){
+      var off=this.segments[i].offset, yf=i/this.height;
+      var sw=Math.sin(t*this.speed+this.phase+off);
+      var x=this.baseX+sw*sway*yf*yf;
+      var y=H-(i+1)*(CELL_H*1.05);
+      ctx.fillText(sw>0.4?'/':sw<-0.4?'\\':'|', x, y);
+    }
+    ctx.restore();
+  }
+}
+
+// ─── School ───────────────────────────────────────────────────────────────────
+var school = {
+  x:0,y:0, vx:1.0,vy:0.35, speed:1.2, dirTimer:0, target:null,
+  slots:[[0,0],[-60,-28],[-60,28],[-120,-14],[-120,14]],
+  init:function(){ this.x=W*0.5; this.y=H*0.4; },
+  update:function(dt,prey){
+    var alive=[];
+    for(var i=0;i<prey.length;i++) if(!prey[i].eaten) alive.push(prey[i]);
+    if(!this.target||this.target.eaten||Math.random()<0.005){
+      var best=null,bs=-999999;
+      for(var i=0;i<alive.length;i++){
+        var p=alive[i],dx=p.x-this.x,dy=p.y-this.y;
+        var d=Math.sqrt(dx*dx+dy*dy)||1;
+        var sc=(dx*this.vx+dy*this.vy)/d-d*0.001;
+        if(sc>bs){bs=sc;best=p;}
+      }
+      this.target=best;
+    }
+    if(this.target){
+      var dx=this.target.x-this.x,dy=this.target.y-this.y;
+      var d=Math.sqrt(dx*dx+dy*dy)||1;
+      this.vx+=(dx/d)*0.06; this.vy+=(dy/d)*0.06;
+    }
+    this.dirTimer-=dt;
+    if(this.dirTimer<=0){
+      var a=rand(-0.35,0.35)*Math.PI, sign=this.vx>=0?1:-1;
+      this.vx+=Math.cos(a)*sign*0.3; this.vy+=Math.sin(a)*0.2;
+      this.dirTimer=rand(3,6);
+    }
+    var spd=this.speed*(1+mid*0.6);
+    var len=Math.sqrt(this.vx*this.vx+this.vy*this.vy)||1;
+    if(len>spd){this.vx=(this.vx/len)*spd;this.vy=(this.vy/len)*spd;}
+    this.x+=this.vx*dt*60; this.y+=this.vy*dt*60;
+    if(this.x<60)    {this.vx= Math.abs(this.vx);this.dirTimer=0;}
+    if(this.x>W-60)  {this.vx=-Math.abs(this.vx);this.dirTimer=0;}
+    if(this.y<40)     this.vy= Math.abs(this.vy);
+    if(this.y>H*0.72) this.vy=-Math.abs(this.vy);
+  },
+  slotPos:function(i){
+    var sl=this.slots[i]||[0,0], a=Math.atan2(this.vy,this.vx);
+    var cos=Math.cos(a), sin=Math.sin(a);
+    return{x:this.x+sl[0]*cos-sl[1]*sin, y:this.y+sl[0]*sin+sl[1]*cos};
+  }
+};
+
+// ─── Scene ────────────────────────────────────────────────────────────────────
+var sharks,fishes,turtles,crabs,jellies,bubbles,seaweeds,particles;
+var globalT=0,lastTime=0,bubbleTimer=0,respawnTimer=0;
+
+function initScene(){
+  school.init();
+  sharks=[
+    new Shark(W*0.5,     H*0.4,      '#4488ff','Daddy',  false),
+    new Shark(W*0.5-0.09,H*0.4-0.05,'#ff88bb','Mommy',  false),
+    new Shark(W*0.5-0.09,H*0.4+0.05,'#ffdd00','Baby',   true)
+  ];
+  fishes=[]; for(var i=0;i<4;i++) fishes.push(new Fish());
+  turtles=[new Turtle()];
+  crabs=[new Crab()];
+  jellies=[new Jellyfish()];
+  bubbles=[];
+  seaweeds=[];
+  for(var i=0;i<8;i++) seaweeds.push(new Seaweed((i/7)*(W-60)+30+rand(-8,8)));
+  particles=[];
+  var pchars=['\u00b7','\u00b7','\u00b7','*','+','.'];
+  for(var i=0;i<20;i++) particles.push({
+    x:rand(0,W), y:rand(0,H),
+    char:pchars[randInt(0,6)],
+    alpha:rand(0.04,0.25),
+    color:'hsl('+randInt(160,220)+',60%,70%)'
+  });
+}
+
+// ─── Draw background ──────────────────────────────────────────────────────────
+function drawBackground(){
+  var g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,  'hsl(200,50%,'+(4+bass*6)+'%)');
+  g.addColorStop(0.6,'hsl(185,60%,'+(3+bass*4)+'%)');
+  g.addColorStop(1,  'hsl(170,50%,'+(2+bass*3)+'%)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  for(var i=0;i<particles.length;i++){
+    var p=particles[i];
+    ctx.font='10px monospace'; ctx.fillStyle=p.color;
+    ctx.globalAlpha=p.alpha*(1+treble*0.5);
+    ctx.fillText(p.char,p.x,p.y);
+  }
+  ctx.globalAlpha=1;
+
+  ctx.fillStyle='hsl(170,40%,'+(8+bass*5)+'%)';
+  ctx.fillRect(0,H-CELL_H*1.5,W,CELL_H*1.5);
+
+  ctx.beginPath();
+  for(var x=0;x<=W;x+=3){
+    var y=40+Math.sin(x*0.02+globalT*0.5)*(5+bass*14);
+    if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle='hsla(185,70%,60%,'+(0.2+bass*0.35)+')';
+  ctx.lineWidth=1; ctx.stroke();
+}
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+function loop(now){
+  requestAnimationFrame(loop);
+  var dt=Math.min((now-lastTime)/1000,0.05);
+  lastTime=now; globalT+=dt;
+
+  getAudioParams();
+
+  bubbleTimer-=dt;
+  if(bubbleTimer<=0){
+    var rate=0.12+treble*0.04;
+    bubbleTimer=rand(rate,rate*2.5);
+    var src=Math.random()<0.5?sharks[randInt(0,sharks.length)]:{x:rand(0,W),y:H};
+    bubbles.push(new Bubble(src.x,src.y-8));
+    if(treble>0.35&&Math.random()<0.5)
+      bubbles.push(new Bubble(rand(0,W),H-rand(10,50)));
+  }
+
+  respawnTimer-=dt;
+  if(respawnTimer<=0){
+    respawnTimer=3.5;
+    for(var i=fishes.length-1;i>=0;i--) if(fishes[i].eaten) fishes[i]=new Fish();
+  }
+
+  drawBackground();
+  for(var i=0;i<seaweeds.length;i++) seaweeds[i].draw(globalT);
+
+  for(var i=bubbles.length-1;i>=0;i--){
+    bubbles[i].update(dt);
+    if(bubbles[i].dead){bubbles.splice(i,1);continue;}
+    bubbles[i].draw();
+  }
+
+  var prey=fishes.concat(turtles);
+  school.update(dt,prey);
+
+  for(var i=0;i<jellies.length;i++) {jellies[i].update(dt);jellies[i].draw();}
+  for(var i=0;i<fishes.length;i++)  {fishes[i].update(dt,sharks);fishes[i].draw();}
+  for(var i=0;i<turtles.length;i++) {turtles[i].update(dt,sharks);turtles[i].draw();}
+  for(var i=0;i<crabs.length;i++)   {crabs[i].update(dt,sharks);crabs[i].draw();}
+  for(var i=0;i<sharks.length;i++)  {sharks[i].update(dt,i);sharks[i].draw();}
+
+  if(beat){
+    ctx.fillStyle='hsla(50,100%,90%,0.03)';
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener('load', function(){
+  resize();
+  initScene();
+  window.addEventListener('resize', function(){ resize(); initScene(); });
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>
